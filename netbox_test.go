@@ -28,7 +28,7 @@ import (
 var hostWithIPv4 = `{"results": [{"family": {"value": 4, "label": "IPv4"},
                                  "address": "10.0.0.2/25", "dns_name": "my_host"}]}`
 
-var reverseDNS = `{"results": [{ "address": "10.0.0.2", "dns_name": "domain.com"}]}`
+var reverseDNS = `{"results": [{ "address": "10.0.0.2/25", "dns_name": "domain.com"}]}`
 
 func TestNetbox(t *testing.T) {
 	defer gock.Off() // Flush pending mocks after test execution
