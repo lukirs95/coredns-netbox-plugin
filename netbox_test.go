@@ -1,3 +1,4 @@
+// Lucas Kirsche
 // Copyright 2020 Oz Tiram <oz.tiram@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,7 +37,7 @@ func TestNetbox(t *testing.T) {
 		map[string]string{"dns_name": "my_host"}).Reply(
 		200).BodyString(hostWithIPv4)
 	nb := newNetbox()
-	nb.Url = "https://example.org/api/ipam/ip-addresses"
+	nb.Url = "https://example.org"
 	nb.Token = "s3kr3tt0ken"
 	nb.TTL, _ = time.ParseDuration("60m")
 
@@ -74,7 +75,7 @@ func TestReverseNetbox(t *testing.T) {
 		map[string]string{"address": "10.0.0.2"}).Reply(
 		200).BodyString(reverseDNS)
 	nb := newNetbox()
-	nb.Url = "https://example.org/api/ipam/ip-addresses"
+	nb.Url = "https://example.org"
 	nb.Token = "s3kr3tt0ken"
 
 	if nb.Name() != "netbox" {

@@ -61,7 +61,7 @@ func get(client *http.Client, url, token string) (*http.Response, error) {
 func (n *Netbox) query(host string, family int) ([]net.IP, error) {
 	var (
 		dns_name = strings.TrimSuffix(host, ".")
-		requrl   = fmt.Sprintf("%s/?dns_name=%s", n.Url, dns_name)
+		requrl   = fmt.Sprintf("%s/api/ipam/ip-addresses/?dns_name=%s", n.Url, dns_name)
 		records  RecordsList
 	)
 
@@ -108,7 +108,7 @@ func (n *Netbox) query(host string, family int) ([]net.IP, error) {
 func (n *Netbox) queryreverse(host string) ([]string, error) {
 	var (
 		ip      = dnsutil.ExtractAddressFromReverse(host)
-		requrl  = fmt.Sprintf("%s/?address=%s", n.Url, ip)
+		requrl  = fmt.Sprintf("%s/api/ipam/ip-addresses/?address=%s", n.Url, ip)
 		records RecordsList
 	)
 

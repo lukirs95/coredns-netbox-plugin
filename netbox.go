@@ -1,3 +1,4 @@
+// Lucas Kirsche
 // Copyright 2020 Oz Tiram <oz.tiram@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,6 +17,7 @@ package netbox
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -34,13 +36,14 @@ import (
 var log = clog.NewWithPlugin("netbox")
 
 type Netbox struct {
-	Url    string
-	Token  string
-	Next   plugin.Handler
-	TTL    time.Duration
-	Fall   fall.F
-	Zones  []string
-	Client *http.Client
+	Url       string
+	Token     string
+	Next      plugin.Handler
+	TTL       time.Duration
+	Fall      fall.F
+	Zones     []string
+	UsePlugin bool
+	Client    *http.Client
 }
 
 // constants to match IP address family used by NetBox
@@ -52,9 +55,7 @@ const (
 // ServeDNS implements the plugin.Handler interface
 func (n *Netbox) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 	var (
-		ips     []net.IP
-		domains []string
-		err     error
+		err error
 	)
 
 	state := request.Request{W: w, Req: r}
@@ -65,28 +66,21 @@ func (n *Netbox) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg)
 		return plugin.NextOrFailure(n.Name(), n.Next, ctx, w, r)
 	}
 
-	qname := state.Name()
-
 	// Export metric with the server label set to the current
 	// server handling the request.
 	requestCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
 
 	var answers []dns.RR
 
-	// check record type here and bail out if not A, AAAA or PTR
-	switch state.QType() {
-	case dns.TypeA:
-		ips, err = n.query(strings.TrimRight(qname, "."), familyIP4)
-		answers = a(qname, uint32(n.TTL.Seconds()), ips)
-	case dns.TypeAAAA:
-		ips, err = n.query(strings.TrimRight(qname, "."), familyIP6)
-		answers = aaaa(qname, uint32(n.TTL.Seconds()), ips)
-	case dns.TypePTR:
-		domains, err = n.queryreverse(qname)
-		answers = ptr(qname, uint32(n.TTL.Seconds()), domains)
-	default:
+	if n.UsePlugin {
+		answers, err = n.queryDNSPlugin(zone, state)
+	} else {
+		answers, err = n.queryNative(state)
+	}
+
+	if err != nil {
 		// always fallthrough if configured
-		if n.Fall.Through(qname) {
+		if n.Fall.Through(state.Name()) {
 			return plugin.NextOrFailure(n.Name(), n.Next, ctx, w, r)
 		}
 
@@ -94,13 +88,8 @@ func (n *Netbox) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg)
 		return dnserror(dns.RcodeServerFailure, state, err)
 	}
 
-	if err != nil {
-		// return SERVFAIL here without fallthrough
-		return dnserror(dns.RcodeServerFailure, state, err)
-	}
-
 	if len(answers) == 0 {
-		if n.Fall.Through(qname) {
+		if n.Fall.Through(state.Name()) {
 			return plugin.NextOrFailure(n.Name(), n.Next, ctx, w, r)
 		} else {
 			return dnserror(dns.RcodeNameError, state, nil)
@@ -122,6 +111,66 @@ func (n *Netbox) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg)
 
 // Name implements the Handler interface.
 func (n *Netbox) Name() string { return "netbox" }
+
+func (n *Netbox) queryNative(state request.Request) ([]dns.RR, error) {
+	var (
+		ips     []net.IP
+		domains []string
+		answers []dns.RR
+		err     error
+	)
+	qname := state.Name()
+	// check record type here and bail out if not A, AAAA or PTR
+	switch state.QType() {
+	case dns.TypeA:
+		ips, err = n.query(strings.TrimRight(qname, "."), familyIP4)
+		answers = a(qname, uint32(n.TTL.Seconds()), ips)
+	case dns.TypeAAAA:
+		ips, err = n.query(strings.TrimRight(qname, "."), familyIP6)
+		answers = aaaa(qname, uint32(n.TTL.Seconds()), ips)
+	case dns.TypePTR:
+		domains, err = n.queryreverse(qname)
+		answers = ptr(qname, uint32(n.TTL.Seconds()), domains)
+	default:
+		return nil, fmt.Errorf("request type not implemented")
+	}
+	return answers, err
+}
+
+func (n *Netbox) queryDNSPlugin(zone string, state request.Request) ([]dns.RR, error) {
+	var (
+		records []DNSRecord
+		zones   []DNSZone
+		answers []dns.RR = make([]dns.RR, 0)
+		err     error
+	)
+	qname := state.Name()
+	qtype := state.QType()
+
+	if qtype == dns.TypeSOA {
+		zones, err = n.queryZone(zone)
+	} else {
+		querySet, OK := DNSQueryReverseMap[qtype]
+		if !OK {
+			return nil, fmt.Errorf("request type not implemented")
+		}
+		records, err = n.queryRecord(zone, qname, querySet)
+	}
+
+	for _, record := range records {
+		// try to resolve CNAME record if question was A or AAAA
+		if record.Type == DNSRecordTypeCNAME && (qtype == dns.TypeA || qtype == dns.TypeAAAA) {
+			if resolvedRecs, err := n.queryRecord(zone, record.AbsoluteValue, DNSQueryReverseMap[qtype]); err == nil {
+				records = append(records, resolvedRecs...)
+			}
+		}
+		answers = append(answers, record.RR())
+	}
+	for _, zone := range zones {
+		answers = append(answers, zone.RR())
+	}
+	return answers, err
+}
 
 // a takes a slice of net.IPs and returns a slice of A RRs.
 func a(zone string, ttl uint32, ips []net.IP) []dns.RR {
